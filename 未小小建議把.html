@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<title>多首連續播放音樂播放器（修正版）</title>
+<style>
+  body { background: #121212; color: #eee; font-family: sans-serif; padding: 20px; }
+  #player { max-width: 600px; margin: auto; }
+  #controls { margin-top: 20px; }
+  button { margin-right: 10px; padding: 8px 12px; background: #333; color: #eee; border: none; border-radius: 4px; cursor: pointer; }
+  button:hover { background: #555; }
+  #title { font-size: 1.2em; margin-bottom: 10px; }
+  #progress { width: 100%; }
+  #time { font-size: 0.9em; margin-top: 5px; }
+  canvas { width: 100%; height: 100px; background: #222; margin-top: 15px; border-radius: 6px; }
+  #fileInput { margin-top: 15px; }
+</style>
+</head>
+<body>
+  <div id="player">
+    <div id="title">請先按開始播放啟動音訊系統，再導入歌曲</div>
+    <button id="startBtn">開始播放</button>
+    <input type="file" id="fileInput" accept="audio/*" multiple disabled />
+    <audio id="audio" crossorigin="anonymous"></audio>
+    <input type="range" id="progress" min="0" max="100" value="0" />
+    <div id="time">00:00 / 00:00</div>
+
+    <div id="controls">
+      <button id="prev" disabled>上一首</button>
+      <button id="play" disabled>播放</button>
+      <button id="next" disabled>下一首</button>
+    </div>
+
+    <canvas id="canvas"></canvas>
+  </div>
+
+<script>
+  const startBtn = document.getElementById('startBtn');
+  const fileInput = document.getElementById('fileInput');
+  const audio = document.getElementById('audio');
+  const playBtn = document.getElementById('play');
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+  const progress = document.getElementById('progress');
+  const title = document.getElementById('title');
+  const time = document.getElementById('time');
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+
+  let playlist = [];
+  let currentIndex = 0;
+  let isPlaying = false;
+  let currentObjectUrl = null;
+
+  // AudioContext 相關
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  const audioCtx = new AudioContext();
+  let sourceNode = null;
+
+  // EQ 設定
+  const bassEQ = audioCtx.createBiquadFilter();
+  bassEQ.type = "lowshelf";
+  bassEQ.frequency.value = 200;
+  bassEQ.gain.value = 5;
+
+  const midEQ = audioCtx.createBiquadFilter();
+  midEQ.type = "peaking";
+  midEQ.frequency.value = 1000;
+  midEQ.Q.value = 1;
+  midEQ.gain.value = 0;
+
+  const trebleEQ = audioCtx.createBiquadFilter();
+  trebleEQ.type = "highshelf";
+  trebleEQ.frequency.value = 3000;
+  trebleEQ.gain.value = 5;
+
+  const analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 256;
+  const bufferLength = analyser.frequencyBinCount;
+  const dataArray = new Uint8Array(bufferLength);
+
+  // Canvas 設定
+  canvas.width = canvas.clientWidth * window.devicePixelRatio;
+  canvas.height = canvas.clientHeight * window.devicePixelRatio;
+  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+
+  function draw() {
+    requestAnimationFrame(draw);
+    analyser.getByteFrequencyData(dataArray);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const barWidth = canvas.width / bufferLength;
+    for (let i = 0; i < bufferLength; i++) {
+      const barHeight = dataArray[i] / 2;
+      const x = i * barWidth;
+      ctx.fillStyle = `rgb(${barHeight * 2},50,${255 - barHeight * 2})`;
+      ctx.fillRect(x, canvas.height - barHeight, barWidth * 0.8, barHeight);
+    }
+  }
+
+  function loadTrack(index) {
+    if (!playlist[index]) {
+      title.textContent = '請導入歌曲';
+      audio.src = '';
+      playBtn.disabled = true;
+      prevBtn.disabled = true;
+      nextBtn.disabled = true;
+      return;
+    }
+    const file = playlist[index];
+    if (currentObjectUrl) {
+      URL.revokeObjectURL(currentObjectUrl);
+    }
+    currentObjectUrl = URL.createObjectURL(file);
+    audio.src = currentObjectUrl;
+    title.textContent = file.name;
+    progress.value = 0;
+    time.textContent = "00:00 / 00:00";
+    audio.load();
+
+    playBtn.disabled = false;
+    prevBtn.disabled = false;
+    nextBtn.disabled = false;
+  }
+
+  startBtn.addEventListener('click', async () => {
+    if (audioCtx.state === 'suspended') {
+      await audioCtx.resume();
+    }
+    if (!sourceNode) {
+      sourceNode = audioCtx.createMediaElementSource(audio);
+      sourceNode.connect(bassEQ);
+      bassEQ.connect(midEQ);
+      midEQ.connect(trebleEQ);
+      trebleEQ.connect(analyser);
+      analyser.connect(audioCtx.destination);
+    }
+    startBtn.disabled = true;
+    fileInput.disabled = false;
+    title.textContent = '請導入歌曲';
+  });
+
+  fileInput.addEventListener('change', (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length === 0) return;
+    playlist = files;
+    currentIndex = 0;
+    loadTrack(currentIndex);
+  });
+
+  playBtn.addEventListener('click', () => {
+    if (!audio.src) return;
+    if (isPlaying) {
+      audio.pause();
+    } else {
+      audio.play();
+    }
+  });
+
+  audio.addEventListener('play', () => {
+    isPlaying = true;
+    playBtn.textContent = "暫停";
+  });
+
+  audio.addEventListener('pause', () => {
+    isPlaying = false;
+    playBtn.textContent = "播放";
+  });
+
+  audio.addEventListener('ended', () => {
+    currentIndex++;
+    if (currentIndex >= playlist.length) currentIndex = 0;
+    loadTrack(currentIndex);
+    audio.play();
+  });
+
+  audio.addEventListener('timeupdate', () => {
+    if (!progress.max || isNaN(audio.duration)) {
+      progress.max = audio.duration || 0;
+    }
+    progress.value = audio.currentTime;
+    time.textContent = formatTime(audio.currentTime) + " / " + formatTime(audio.duration);
+  });
+
+  progress.addEventListener('input', () => {
+    audio.currentTime = progress.value;
+  });
+
+  prevBtn.addEventListener('click', () => {
+    currentIndex--;
+    if (currentIndex < 0) currentIndex = playlist.length - 1;
+    loadTrack(currentIndex);
+    audio.play();
+  });
+
+  nextBtn.addEventListener('click', () => {
+    currentIndex++;
+    if (currentIndex >= playlist.length) currentIndex = 0;
+    loadTrack(currentIndex);
+    audio.play();
+  });
+
+  function formatTime(time) {
+    if (isNaN(time) || time === Infinity) return "00:00";
+    const min = Math.floor(time / 60);
+    const sec = Math.floor(time % 60);
+    return `${min.toString().padStart(2,'0')}:${sec.toString().padStart(2,'0')}`;
+  }
+
+  draw();
+</script>
+</body>
+</html>
